@@ -200,7 +200,7 @@ class DeepQNetwork:
 		self.r = tf.placeholder(tf.float32, [None, ], name='r')  # input Reward
 		self.a = tf.placeholder(tf.int32, [None, ], name='a')  # input Action
 
-		w_initializer, b_initializer = tf.random_normal_initializer(0., 0.1), tf.constant_initializer(0.1)
+		w_initializer, b_initializer = tf.random_normal_initializer(0., 0.3), tf.constant_initializer(0.1)
 
 		##### Predict Network #####
 		with tf.variable_scope('pred_net'):
@@ -228,6 +228,7 @@ class DeepQNetwork:
 
 		# optimizer
 		with tf.variable_scope('train'):
+			#self._train_op = tf.train.AdamOptimizer(self.lr).minimize(self.loss)
 			self._train_op = tf.train.RMSPropOptimizer(self.lr).minimize(self.loss)
 
 	def store_transition(self, s, a, r, s_):
@@ -278,3 +279,84 @@ class DeepQNetwork:
 		self.epsilon = self.epsilon + self.epsilon_increment if self.epsilon < self.epsilon_max else self.epsilon_max
 		self.learn_step_counter += 1
 	
+
+class PolicyGradient:
+	def __init__(
+		self,
+		actions,
+		features,
+		lr=0.001,
+		reward_decay=0.9,
+	):
+		self.actions = actions
+		self.n_features = features
+		self.lr = lr
+		self.gamma = reward_decay
+		self.ep_obs, self.ep_as, self.ep_rs = [], [], []
+
+		self.build_net()
+
+		self.sess = tf.Session()
+		self.sess.run(tf.global_variables_initializer())
+	
+	def build_net(self):
+		self.tf_obs = tf.placeholder(tf.float32, [None, self.n_features], name="observations")
+		self.tf_acts = tf.placeholder(tf.int32, [None, ], name="actions_num")
+		self.tf_vt = tf.placeholder(tf.float32, [None, ], name="actions_value")
+
+		w_initializer, b_initializer = tf.random_normal_initializer(0., 0.3), tf.constant_initializer(0.1)
+
+		# network define
+		layer = tf.layers.dense(self.tf_obs, 20, tf.nn.elu, kernel_initializer=w_initializer, bias_initializer=b_initializer, name='fc1')
+		layer = tf.layers.dense(layer, self.actions, kernel_initializer=w_initializer, bias_initializer=b_initializer, name='fc2')
+		 
+		# all actions' propabilities
+		self.all_act_prob = tf.nn.softmax(layer, name='act_prob')
+		
+		# loss function - mse
+		with tf.variable_scope('loss'):
+			neg_log_prob = tf.reduce_sum(-tf.log(self.all_act_prob)*tf.one_hot(self.tf_acts, self.actions), axis=1)
+			self.loss = tf.reduce_mean(neg_log_prob * self.tf_vt)
+
+		# optimizer
+		with tf.variable_scope('train'):
+			self.train_op = tf.train.AdamOptimizer(self.lr).minimize(self.loss)
+
+	def store_transition(self, s, a, r):
+		# store all episode steps observation, action, reward
+		self.ep_obs.append(s)
+		self.ep_as.append(a)
+		self.ep_rs.append(r)
+
+	def choose_action(self, observation):
+		# new batch dimension
+		observation = observation[np.newaxis, :]
+
+		prob_weights = self.sess.run(self.all_act_prob, feed_dict={self.tf_obs: observation})
+		action = np.random.choice(range(prob_weights.shape[1]), p=prob_weights.ravel())
+
+		return action
+
+	def learn(self):
+		
+		discounted_ep_rs_norm = self.discount_and_norm_rewards()
+		self.sess.run(self.train_op, feed_dict={
+			self.tf_obs: np.vstack(self.ep_obs),
+			self.tf_acts: np.array(self.ep_as),
+			self.tf_vt: discounted_ep_rs_norm,
+		})
+
+		self.ep_obs, self.ep_as, self.ep_rs = [], [], []
+		return discounted_ep_rs_norm
+
+
+	def discount_and_norm_rewards(self):
+		discounted_ep_rs = np.zeros_like(self.ep_rs)
+		running_add = 0
+		for t in reversed(range(0, len(self.ep_rs))):
+			running_add = running_add * self.gamma + self.ep_rs[t]
+			discounted_ep_rs[t] = running_add
+		discounted_ep_rs -= np.mean(discounted_ep_rs)
+		discounted_ep_rs /= np.std(discounted_ep_rs)
+		
+		return discounted_ep_rs
