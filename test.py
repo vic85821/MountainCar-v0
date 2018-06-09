@@ -28,8 +28,12 @@ if __name__ == "__main__":
 	parser.add_argument('--episode',
 						default='5000',
 						help='input how many episodes to execute')
+	parser.add_argument('--test', 
+						default='False',
+						help='is testing mode or not')
 	args = parser.parse_args()
 	
+
 	if args.method == 'Q-learning':
 		RL = QLearningTable(range(0, env.action_space.n))
 	elif args.method == 'Sarsa':
@@ -37,17 +41,31 @@ if __name__ == "__main__":
 	elif args.method == 'SarsaLambda':
 		RL = SarsaLambdaTable(range(0, env.action_space.n))
 	elif args.method == 'DQN':
-		RL = DeepQNetwork(env.action_space.n, 2,
-						  lr = 0.001,
-						  reward_decay = 0.9,
-						  e_greedy = 0.9,
-						  replace_target_iter = 300,
-					  	  memory_size = 3000,
-					  	  e_greedy_increment = 0.0001
-					  	 )
+		if args.test == 'True':
+			RL = DeepQNetwork(env.action_space.n, 2,
+							  lr = 0.1,
+							  batch_size = 128,
+							  reward_decay = 0.9,
+							  e_greedy = 0.9,
+							  replace_target_iter = 300,
+							  memory_size = 3000,
+							  e_greedy_increment = 0.0001,
+							  path='./model/model',
+							  test=True
+							 )
+		else:
+			RL = DeepQNetwork(env.action_space.n, 2,
+							  lr = 0.1,
+							  batch_size = 128,
+							  reward_decay = 0.9,
+							  e_greedy = 0.9,
+							  replace_target_iter = 300,
+							  memory_size = 3000,
+							  e_greedy_increment = 0.0001,
+							  )
 	elif args.method == 'PolicyGradient':
 		RL = PolicyGradient(env.action_space.n, 2,
-							lr = 0.001,
+							lr = 0.02,
 							reward_decay = 0.995
 						   )
 	else:
@@ -57,16 +75,22 @@ if __name__ == "__main__":
 	steps = []
 
 	for i_episode in range(int(args.episode)):
+		
 		# Get the observation from env
 		observation = env.reset()
 		
+		if args.method == 'SarsaLambda':
+			RL.eligibility_trace *= 0
+
 		rewards = 0
 		step = 0
 			
 		while True:
-			
-			# Fresh env
-			env.render()
+			if args.method == 'PolicyGradient':
+				if RENDER : env.render()
+			else:
+				# Fresh env
+				env.render()
 
 			# Select action
 			action = RL.choose_action(observation)
@@ -75,8 +99,12 @@ if __name__ == "__main__":
 			observation_, reward, done, info = env.step(action)
 
 			rewards = rewards + reward
-			reward = abs(observation_[0] - (-0.5)) + ((observation_[0] - observation[0]) * observation_[1] > 0) * 0.2 + \
-			         (observation_[0] > 0.5) * 10
+
+			tmp = [round(observation[0], 2), observation[1]]
+			tmp_ = [round(observation_[0], 2), observation_[1]]
+			
+			reward = abs(tmp_[0] - (-0.5)) + ((tmp_[0] - tmp[0]) * tmp_[1]) \
+					 + (tmp_[0] > 0.5) * (tmp_[0] - 0.2) * 10
 			
 			
 			if args.method == 'Q-learning':
@@ -93,11 +121,12 @@ if __name__ == "__main__":
 					RL.learn(observation, action, reward, observation_, action_)
 
 			elif args.method == 'DQN' or err == True:
-				RL.store_transition(observation, action, reward, observation_)
-
-				# use Deep Q Network
-				if (step > 300) and (step % 5 == 0):
-					RL.learn()
+				if args.test == 'False':
+					RL.store_transition(observation, action, reward, observation_)
+				
+					# use Deep Q Network
+					if (step > 300) and (step % 5 == 0):
+						RL.learn()
 
 			elif args.method == 'PolicyGradient':
 				RL.store_transition(observation, action, reward)
@@ -131,6 +160,9 @@ if __name__ == "__main__":
 			
 			step = step + 1
 	
-	env.close()
-	df = pd.DataFrame(steps, columns=["steps"])
+	if args.method == 'DQN':
+		RL.model_save('./model/model')
+	
+	df = pd.DataFrame(steps, columns=['step'])
 	df.to_csv("count.csv", index=False)
+	env.close()
